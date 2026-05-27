@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import cancionesRoutes from './routes/canciones.routes';
 import practicasRoutes from './routes/practicas.routes';
+import scoreRoutes from './routes/score.routes';
 
 dotenv.config();
 
@@ -26,6 +27,7 @@ app.get('/', (req, res) => {
 
 app.use('/api/canciones', cancionesRoutes);
 app.use('/api/practicas', practicasRoutes);
+app.use('/api/score', scoreRoutes);
 
 app.listen(PORT, () => {
   console.log(`Backend corriendo en http://localhost:${PORT}`);
