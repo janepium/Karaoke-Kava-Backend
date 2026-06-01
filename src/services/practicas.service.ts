@@ -9,6 +9,9 @@ type CrearPracticaInput = {
 
 type ActualizarResultadoPracticaInput = {
   puntaje: number;
+  puntajeLetra?: number;
+  puntajeAudio?: number;
+  puntajeVoz?: number;
   feedback: string;
   transcripcion: string;
   id_estado: number;
@@ -49,6 +52,9 @@ export class PracticasService {
       .from('tbl_practica')
       .update({
         puntaje: data.puntaje,
+        puntaje_letra: data.puntajeLetra,
+        puntaje_audio: data.puntajeAudio,
+        puntaje_voz: data.puntajeVoz,
         feedback: data.feedback,
         transcripcion: data.transcripcion,
         id_estado: data.id_estado

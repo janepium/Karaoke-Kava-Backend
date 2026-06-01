@@ -1,4 +1,12 @@
 import { supabase } from '../config/supabase';
+let aiInstance: any = null;
+async function getAI() {
+  if (!aiInstance) {
+    const { GoogleGenAI } = await eval(`import('@google/genai')`);
+    aiInstance = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  }
+  return aiInstance;
+}
 
 type EvaluarPracticaInput = {
   idPractica: number;
@@ -7,6 +15,7 @@ type EvaluarPracticaInput = {
   rmsPromedio: number;
   porcentajeSilencio: number;
   porcentajeActividad: number;
+  porcentajeClipping?: number;
 };
 
 function normalizarTexto(texto: string): string {
@@ -102,12 +111,15 @@ function calcularCobertura(letra: string, transcripcion: string): number {
 }
 
 function calcularCalidadAudio(duracion: number, cantidadPalabras: number): number {
+  // Si no hay palabras detectadas o la duración es mínima, puntaje es 0
+  if (cantidadPalabras === 0 || duracion < 2) return 0;
+
   let puntajeDuracion = 0;
 
   if (duracion > 20) puntajeDuracion = 10;
   else if (duracion > 10) puntajeDuracion = 7;
   else if (duracion > 5) puntajeDuracion = 4;
-  else puntajeDuracion = 1;
+  else puntajeDuracion = 0;
 
   const densidad = cantidadPalabras / Math.max(duracion, 1);
 
@@ -116,14 +128,14 @@ function calcularCalidadAudio(duracion: number, cantidadPalabras: number): numbe
   if (densidad > 2) puntajeContinuidad = 15;
   else if (densidad > 1) puntajeContinuidad = 10;
   else if (densidad > 0.5) puntajeContinuidad = 5;
-  else puntajeContinuidad = 2;
+  else puntajeContinuidad = 0;
 
   let puntajeGeneral = 0;
 
   if (cantidadPalabras > 20) puntajeGeneral = 15;
   else if (cantidadPalabras > 10) puntajeGeneral = 10;
   else if (cantidadPalabras > 5) puntajeGeneral = 5;
-  else puntajeGeneral = 2;
+  else puntajeGeneral = 0;
 
   return puntajeDuracion + puntajeContinuidad + puntajeGeneral;
 }
@@ -133,17 +145,22 @@ function calcularCalidadVocalGeneral(
   porcentajeSilencio: number,
   porcentajeActividad: number
 ) {
+  // Si el volumen es prácticamente nulo, la voz no existió
+  if (rmsPromedio < 0.01) return 0;
+  // Si hubo silencio casi total, puntaje vocal es 0
+  if (porcentajeSilencio > 85) return 0;
+
   let puntaje = 0;
 
   if (rmsPromedio >= 0.05) puntaje += 10;
   else if (rmsPromedio >= 0.03) puntaje += 7;
   else if (rmsPromedio >= 0.015) puntaje += 4;
-  else puntaje += 1;
+  else puntaje += 0;
 
   if (porcentajeActividad >= 70) puntaje += 10;
   else if (porcentajeActividad >= 50) puntaje += 7;
   else if (porcentajeActividad >= 30) puntaje += 4;
-  else puntaje += 1;
+  else puntaje += 0;
 
   if (porcentajeSilencio <= 25) {
     puntaje += 10;
@@ -151,10 +168,10 @@ function calcularCalidadVocalGeneral(
     puntaje += 8;
   } else if (porcentajeSilencio <= 65) {
     if (porcentajeActividad >= 50) puntaje += 6;
-    else puntaje += 4;
-  } else {
-    if (porcentajeActividad < 30) puntaje += 1;
     else puntaje += 3;
+  } else {
+    if (porcentajeActividad < 30) puntaje += 0;
+    else puntaje += 2;
   }
 
   return puntaje;
@@ -168,7 +185,8 @@ export class EvaluacionesService {
       duracionAudio,
       rmsPromedio,
       porcentajeSilencio,
-      porcentajeActividad
+      porcentajeActividad,
+      porcentajeClipping = 0
     } = data;
 
     const { data: practica, error: errorPractica } = await supabase
@@ -204,10 +222,26 @@ export class EvaluacionesService {
       .split(' ')
       .filter(Boolean).length;
 
-    if (similitud < 0.15) {
+    // Si no se detectó transcripción alguna, puntaje es 0
+    if (!transcripcionFinal.trim() || cantidadPalabras === 0) {
       return {
-        puntaje: 20,
-        feedback: 'No se detectó relación con la canción.',
+        puntaje: 0,
+        puntajeLetra: 0,
+        puntajeAudio: 0,
+        puntajeVoz: 0,
+        feedback: 'No se detectó voz ni canto. ¿Seguro que cantaste?',
+        transcripcion: transcripcionFinal
+      };
+    }
+
+    // Si la similitud con la letra es casi nula, no merece puntos
+    if (similitud < 0.10) {
+      return {
+        puntaje: 0,
+        puntajeLetra: 0,
+        puntajeAudio: 0,
+        puntajeVoz: 0,
+        feedback: 'No se detectó relación con la canción. Intenta seguir la letra.',
         transcripcion: transcripcionFinal
       };
     }
@@ -215,21 +249,29 @@ export class EvaluacionesService {
     let puntajeMaximo = 100;
 
     if (coberturaTemporal < 0.10 || cobertura < 0.10) {
-      puntajeMaximo = 35;
+      puntajeMaximo = 15;
     } else if (coberturaTemporal < 0.20 || cobertura < 0.20) {
-      puntajeMaximo = 50;
+      puntajeMaximo = 35;
     } else if (coberturaTemporal < 0.35) {
-      puntajeMaximo = 70;
+      puntajeMaximo = 55;
+    } else if (coberturaTemporal < 0.50) {
+      puntajeMaximo = 75;
     }
 
     const puntajeLetra = similitud * 35 + cobertura * 25;
-    const puntajeAudioBase = calcularCalidadAudio(duracionFinal, cantidadPalabras);
+    let puntajeAudioBase = calcularCalidadAudio(duracionFinal, cantidadPalabras);
 
-    const puntajeVoz = calcularCalidadVocalGeneral(
+    let puntajeVoz = calcularCalidadVocalGeneral(
       typeof rmsPromedio === 'number' ? rmsPromedio : 0,
       typeof porcentajeSilencio === 'number' ? porcentajeSilencio : 100,
       typeof porcentajeActividad === 'number' ? porcentajeActividad : 0
     );
+
+    // Penalización por Gritos (Clipping)
+    if (porcentajeClipping > 15) {
+      puntajeAudioBase = Math.max(0, puntajeAudioBase - 15);
+      puntajeVoz = Math.max(0, puntajeVoz - 10);
+    }
 
     const puntajeAudio = puntajeAudioBase * similitud;
     const puntajeVozAjustado = puntajeVoz * similitud;
@@ -288,24 +330,42 @@ export class EvaluacionesService {
       }
     }
 
-    let inicioFeedback = '';
-
-    if (puntajeFinal >= 85) {
-      inicioFeedback = 'Excelente interpretación.';
-    } else if (puntajeFinal >= 70) {
-      inicioFeedback = 'Buena interpretación.';
-    } else if (puntajeFinal >= 55) {
-      inicioFeedback = 'Interpretación aceptable.';
-    } else if (puntajeFinal >= 35) {
-      inicioFeedback = 'Interpretación débil.';
-    } else {
-      inicioFeedback = 'Interpretación muy limitada.';
+    if (porcentajeClipping > 15) {
+      observaciones.push('el usuario gritó demasiado y saturó el micrófono');
     }
 
-    const feedback = `${inicioFeedback} ${observaciones.join('. ')}.`;
+    // Generación de feedback dinámico con Gemini
+    let feedback = '';
+    try {
+      const aiClient = await getAI();
+      const prompt = `
+Eres un juez de karaoke con una personalidad carismática, algo sarcástica pero muy amable, y con toques profesionales.
+Acabas de escuchar a un participante cantar la canción "${cancion.titulo}".
+Aquí tienes sus métricas (evaluadas sobre 100 en total):
+- Puntaje general: ${Math.round(puntajeFinal)}/100
+- Precisión de la letra: ${Math.round(puntajeLetra)} (Cantó: "${transcripcionFinal}")
+- Potencia vocal y presencia: ${Math.round(puntajeVozAjustado)}
+- Ritmo y audio: ${Math.round(puntajeAudio)}
+- Observaciones técnicas del sistema: ${observaciones.join('. ')}.
+
+Dale un feedback directo al usuario en 2 o 3 oraciones hablándole directamente ("Tú..."). Sé divertido, usa emojis y mantén tu personalidad. Si el puntaje es bajo, haz una crítica constructiva con algo de sarcasmo ligero; si es alto, alábalo profesionalmente.
+`;
+
+      const response = await aiClient.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+      });
+      feedback = response.text || 'Buena interpretación, ¡sigue practicando!';
+    } catch (e) {
+      console.error('Error al generar feedback con Gemini:', e);
+      feedback = 'Buena interpretación. ' + observaciones.join('. ');
+    }
 
     const resultado = {
       puntaje: Math.round(puntajeFinal),
+      puntajeLetra: Math.round(puntajeLetra),
+      puntajeAudio: Math.round(puntajeAudio),
+      puntajeVoz: Math.round(puntajeVozAjustado),
       feedback,
       transcripcion: transcripcionFinal
     };
