@@ -83,9 +83,9 @@ export class ScoreService {
   }
 
   private calcularEtiqueta(puntaje: number): string {
-    if (puntaje >= 90) return 'Perfect!';
-    if (puntaje >= 70) return 'Great!';
-    if (puntaje >= 50) return 'Good';
+    if (puntaje >= 75) return 'Perfect!';
+    if (puntaje >= 55) return 'Great!';
+    if (puntaje >= 35) return 'Good';
     return 'Keep practicing';
   }
 }
