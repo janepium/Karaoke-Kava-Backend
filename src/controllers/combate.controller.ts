@@ -47,7 +47,7 @@ export class CombateController {
   async aceptarCombate(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      const combate = await combateService.aceptarCombate(id);
+      const combate = await combateService.aceptarCombate(id as string);
       return res.status(200).json({ ok: true, data: combate });
     } catch (error) {
       return res.status(500).json({
@@ -86,7 +86,7 @@ export class CombateController {
   async obtenerCombatesUsuario(req: Request, res: Response) {
     try {
       const { idUsuario } = req.params;
-      const combates = await combateService.obtenerCombatesUsuario(idUsuario);
+      const combates = await combateService.obtenerCombatesUsuario(idUsuario as string);
       return res.status(200).json({ ok: true, data: combates });
     } catch (error) {
       return res.status(500).json({
@@ -99,7 +99,7 @@ export class CombateController {
   async obtenerDetalleCombate(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      const combate = await combateService.obtenerDetalleCombate(id);
+      const combate = await combateService.obtenerDetalleCombate(id as string);
       return res.status(200).json({ ok: true, data: combate });
     } catch (error) {
       return res.status(500).json({
