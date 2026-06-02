@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase';
+import { ESTADO_COMBATE, ESTADO_RONDA } from '../constants/estados';
 
 export class CombateService {
 
@@ -22,7 +23,7 @@ export class CombateService {
       .insert({
         id_usuario_jugador1: idJugador1,
         id_usuario_jugador2: idJugador2,
-        id_estado: 1 // Asumiendo que 1 es 'pendiente/invitado'. Ajustar si usan UUIDs para estados o texto
+        id_estado: ESTADO_COMBATE.PENDIENTE
       })
       .select()
       .single();
@@ -34,18 +35,15 @@ export class CombateService {
   // 2. Buscar oponente automáticamente (Matchmaking)
   async buscarOponente(idJugador1: string, idNivel: string) {
     // Buscar si hay alguien del mismo nivel buscando oponente
-    // Primero buscar combates en estado 'buscando' donde jugador2 es null y jugador1 tiene mismo nivel
-    
-    // Obtenemos combates en estado 'buscando' (ej. id_estado = 2)
     const { data: combatesBuscando, error: errBusqueda } = await supabase
       .from('tbl_combate')
       .select(`
         *,
         jugador1:tbl_usuario!id_usuario_jugador1(id_nivel)
       `)
-      .eq('id_estado', 2)
+      .eq('id_estado', ESTADO_COMBATE.EN_CURSO)
       .is('id_usuario_jugador2', null)
-      .neq('id_usuario_jugador1', idJugador1); // No emparejarse consigo mismo
+      .neq('id_usuario_jugador1', idJugador1);
 
     if (errBusqueda) throw new Error(errBusqueda.message);
 
@@ -55,27 +53,27 @@ export class CombateService {
     if (posibles.length > 0) {
       // Elegir uno aleatoriamente
       const combateElegido = posibles[Math.floor(Math.random() * posibles.length)];
-      
-      // Emparejar y cambiar estado a 'en_curso' (ej. id_estado = 3)
+
+      // Emparejar y cambiar estado a 'en_curso'
       const { data, error } = await supabase
         .from('tbl_combate')
         .update({
           id_usuario_jugador2: idJugador1,
-          id_estado: 3 // en_curso
+          id_estado: ESTADO_COMBATE.EN_CURSO
         })
         .eq('id', combateElegido.id)
         .select()
         .single();
-        
+
       if (error) throw new Error(error.message);
       return { status: 'match_found', combate: data };
     } else {
-      // Crear nuevo registro buscando oponente
+      // Crear nuevo registro en estado en_curso (esperando contrincante)
       const { data, error } = await supabase
         .from('tbl_combate')
         .insert({
           id_usuario_jugador1: idJugador1,
-          id_estado: 2 // buscando
+          id_estado: ESTADO_COMBATE.EN_CURSO
         })
         .select()
         .single();
@@ -89,7 +87,7 @@ export class CombateService {
   async aceptarCombate(idCombate: string) {
     const { data, error } = await supabase
       .from('tbl_combate')
-      .update({ id_estado: 3 }) // en_curso
+      .update({ id_estado: ESTADO_COMBATE.EN_CURSO })
       .eq('id', idCombate)
       .select()
       .single();
@@ -98,13 +96,13 @@ export class CombateService {
     return data;
   }
 
-  // 3b. Cancelar búsqueda de matchmaking (elimina el registro en estado 'buscando')
+  // 3b. Cancelar búsqueda de matchmaking
   async cancelarBusqueda(idCombate: string) {
     const { error } = await supabase
       .from('tbl_combate')
       .delete()
       .eq('id', idCombate)
-      .eq('id_estado', 2); // Solo se puede cancelar si está en estado buscando
+      .eq('id_estado', ESTADO_COMBATE.EN_CURSO);
 
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -116,7 +114,7 @@ export class CombateService {
       .from('tbl_combate')
       .delete()
       .eq('id', idCombate)
-      .eq('id_estado', 1); // Solo se pueden rechazar invitaciones pendientes
+      .eq('id_estado', ESTADO_COMBATE.PENDIENTE);
 
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -162,7 +160,7 @@ export class CombateService {
         numero_ronda: numeroRonda,
         id_cancion: idCancion,
         id_usuario_selector: idSelector,
-        id_estado: 1 // pendiente
+        id_estado: ESTADO_RONDA.PENDIENTE
       })
       .select()
       .single();
@@ -183,14 +181,14 @@ export class CombateService {
 
     if (turnoExistente) throw new Error('Ya registraste tu turno en esta ronda.');
 
-    // Verificar que la ronda esté en estado pendiente (no completada)
+    // Verificar que la ronda esté en estado pendiente (no cerrada)
     const { data: ronda } = await supabase
       .from('tbl_rondas')
       .select('id_estado')
       .eq('id', idRonda)
       .single();
 
-    if (!ronda || ronda.id_estado !== 1) throw new Error('Esta ronda ya está cerrada.');
+    if (!ronda || ronda.id_estado !== ESTADO_RONDA.PENDIENTE) throw new Error('Esta ronda ya está cerrada.');
 
     const { data, error } = await supabase
       .from('tbl_turnos')
@@ -241,7 +239,7 @@ export class CombateService {
       .from('tbl_rondas')
       .update({
         id_usuario_ganador: idGanadorRonda,
-        id_estado: 2 // completada
+        id_estado: ESTADO_RONDA.CERRADA
       })
       .eq('id', idRonda)
       .select()
@@ -254,12 +252,12 @@ export class CombateService {
   }
 
   private async evaluarCombate(idCombate: string) {
-    // Traer TODAS las rondas completadas (incluyendo las empatadas con ganador null)
+    // Traer TODAS las rondas cerradas (incluyendo las empatadas con ganador null)
     const { data: rondas, error } = await supabase
       .from('tbl_rondas')
       .select('*')
       .eq('id_combate', idCombate)
-      .eq('id_estado', 2); // solo completadas
+      .eq('id_estado', ESTADO_RONDA.CERRADA);
 
     if (error) throw new Error(error.message);
 
@@ -302,7 +300,7 @@ export class CombateService {
         .from('tbl_combate')
         .update({
           id_usuario_ganador: ganadorCombate,
-          id_estado: 4 // finalizado
+          id_estado: ESTADO_COMBATE.FINALIZADO
         })
         .eq('id', idCombate);
     } else if (hayDesempate) {
@@ -348,14 +346,14 @@ export class CombateService {
       // Seleccionar una al azar
       const seleccionada = cancionesDisponibles[Math.floor(Math.random() * cancionesDisponibles.length)];
       
-      // Crear la ronda 3
+      // Crear la ronda 3 de desempate
       await supabase
         .from('tbl_rondas')
         .insert({
           id_combate: idCombate,
           numero_ronda: 3,
           id_cancion: seleccionada.id,
-          id_estado: 1 // pendiente
+          id_estado: ESTADO_RONDA.PENDIENTE
         });
     }
   }
