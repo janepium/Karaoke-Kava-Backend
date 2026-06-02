@@ -144,36 +144,55 @@ export class CancionesService {
   }
 
   async eliminarCancion(id: number) {
+    // Verificar si la canción tiene prácticas asociadas
+    const { count: countPracticas } = await supabase
+      .from('tbl_practica')
+      .select('id', { count: 'exact', head: true })
+      .eq('id_cancion', id);
+
+    if (countPracticas && countPracticas > 0) {
+      throw new Error(
+        `No se puede eliminar esta canción porque ya fue usada en ${countPracticas} práctica(s). ` +
+        'Eliminar el historial de los usuarios podría afectar sus puntajes y niveles.'
+      );
+    }
+
+    // Verificar si la canción fue usada en alguna ronda de combate
+    const { count: countRondas } = await supabase
+      .from('tbl_rondas')
+      .select('id', { count: 'exact', head: true })
+      .eq('id_cancion', id);
+
+    if (countRondas && countRondas > 0) {
+      throw new Error(
+        `No se puede eliminar esta canción porque ya fue usada en ${countRondas} combate(s). ` +
+        'Eliminarla rompería el historial de esos combates.'
+      );
+    }
+
+    // Seguro eliminar — borrar relaciones primero y luego la canción
     const { error: errorArtistas } = await supabase
       .from('tbl_artista_x_cancion')
       .delete()
       .eq('id_cancion', id);
 
-    if (errorArtistas) {
-      throw new Error(errorArtistas.message);
-    }
+    if (errorArtistas) throw new Error(errorArtistas.message);
 
     const { error: errorGeneros } = await supabase
       .from('tbl_genero_musical_x_cancion')
       .delete()
       .eq('id_cancion', id);
 
-    if (errorGeneros) {
-      throw new Error(errorGeneros.message);
-    }
+    if (errorGeneros) throw new Error(errorGeneros.message);
 
     const { error } = await supabase
       .from('tbl_cancion')
       .delete()
       .eq('id', id);
 
-    if (error) {
-      throw new Error(error.message);
-    }
+    if (error) throw new Error(error.message);
 
-    return {
-      message: 'Canción eliminada correctamente'
-    };
+    return { message: 'Canción eliminada correctamente' };
   }
 
   private async guardarRelaciones(
