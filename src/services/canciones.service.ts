@@ -35,7 +35,17 @@ export class CancionesService {
       throw new Error(error.message);
     }
 
-    return data;
+    // Traer los artistas desde la tabla intermedia (igual que obtenerCancionesAdmin)
+    const { data: artistasRaw } = await supabase
+      .from('tbl_artista_x_cancion')
+      .select('tbl_artista(id, nombre)')
+      .eq('id_cancion', id);
+
+    const artistas = (artistasRaw ?? [])
+      .map((item: any) => item.tbl_artista?.nombre)
+      .filter(Boolean);
+
+    return { ...data, artistas };
   }
 
   async obtenerCancionesAdmin() {
