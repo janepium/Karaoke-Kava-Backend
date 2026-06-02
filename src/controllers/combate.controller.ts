@@ -48,13 +48,24 @@ export class CombateController {
     try {
       const { id } = req.params;
       const combate = await combateService.aceptarCombate(id as string);
-
-
       return res.status(200).json({ ok: true, data: combate });
     } catch (error) {
       return res.status(500).json({
         ok: false,
         message: error instanceof Error ? error.message : 'Error al aceptar combate'
+      });
+    }
+  }
+
+  async rechazarCombate(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      await combateService.rechazarCombate(id as string);
+      return res.status(200).json({ ok: true, message: 'Invitación rechazada' });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        message: error instanceof Error ? error.message : 'Error al rechazar combate'
       });
     }
   }

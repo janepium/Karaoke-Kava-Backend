@@ -98,6 +98,18 @@ export class CombateService {
     return data;
   }
 
+  // 3b. Rechazar Combate (Elimina la invitación pendiente)
+  async rechazarCombate(idCombate: string) {
+    const { error } = await supabase
+      .from('tbl_combate')
+      .delete()
+      .eq('id', idCombate)
+      .eq('id_estado', 1); // Solo se pueden rechazar invitaciones pendientes
+
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  }
+
   // 4. Crear Ronda (El selector elige la canción)
   async crearRonda(idCombate: string, numeroRonda: number, idCancion: string, idSelector: string) {
     const { data, error } = await supabase
@@ -225,15 +237,37 @@ export class CombateService {
   private async crearRondaDesempate(idCombate: string, rondasPrevias: any[]) {
     const idsCancionesPrevias = rondasPrevias.map(r => r.id_cancion);
 
-    // Obtener todas las canciones que no estén en previas
+    // 1. Obtener los géneros de las canciones ya cantadas
+    const { data: generosPrevios } = await supabase
+      .from('tbl_genero_musical_x_cancion')
+      .select('id_genero_musical')
+      .in('id_cancion', idsCancionesPrevias);
+
+    const idsGenerosPrevios = (generosPrevios || []).map(g => g.id_genero_musical);
+
+    // 2. Obtener todas las canciones con sus géneros
     const { data: canciones, error } = await supabase
       .from('tbl_cancion')
-      .select('id');
+      .select('id, tbl_genero_musical_x_cancion(id_genero_musical)');
 
     if (error || !canciones) return;
 
-    const cancionesDisponibles = canciones.filter(c => !idsCancionesPrevias.includes(c.id));
+    // 3. Filtrar para no repetir canciones
+    let cancionesDisponibles = canciones.filter(c => !idsCancionesPrevias.includes(c.id));
     
+    // 4. Intentar filtrar canciones que tengan géneros DISTINTOS a los previos
+    const cancionesConGeneroDiferente = cancionesDisponibles.filter(c => {
+      // array de generos de esta cancion
+      const generos = c.tbl_genero_musical_x_cancion.map((g: any) => g.id_genero_musical);
+      // Queremos que no haya intersección con los géneros previos
+      return !generos.some((g: any) => idsGenerosPrevios.includes(g));
+    });
+
+    // Si hay canciones de otros géneros, usamos esas. Si no, hacemos fallback a todas las disponibles.
+    if (cancionesConGeneroDiferente.length > 0) {
+      cancionesDisponibles = cancionesConGeneroDiferente;
+    }
+
     if (cancionesDisponibles.length > 0) {
       // Seleccionar una al azar
       const seleccionada = cancionesDisponibles[Math.floor(Math.random() * cancionesDisponibles.length)];
