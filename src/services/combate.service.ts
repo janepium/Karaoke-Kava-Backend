@@ -98,7 +98,19 @@ export class CombateService {
     return data;
   }
 
-  // 3b. Rechazar Combate (Elimina la invitación pendiente)
+  // 3b. Cancelar búsqueda de matchmaking (elimina el registro en estado 'buscando')
+  async cancelarBusqueda(idCombate: string) {
+    const { error } = await supabase
+      .from('tbl_combate')
+      .delete()
+      .eq('id', idCombate)
+      .eq('id_estado', 2); // Solo se puede cancelar si está en estado buscando
+
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  }
+
+  // 3c. Rechazar Combate (Elimina la invitación pendiente)
   async rechazarCombate(idCombate: string) {
     const { error } = await supabase
       .from('tbl_combate')
@@ -112,6 +124,37 @@ export class CombateService {
 
   // 4. Crear Ronda (El selector elige la canción)
   async crearRonda(idCombate: string, numeroRonda: number, idCancion: string, idSelector: string) {
+    // La ronda 3 (desempate) la crea el sistema automáticamente — nunca manualmente
+    if (numeroRonda >= 3) throw new Error('La ronda de desempate la elige el sistema automáticamente.');
+
+    // Evitar rondas duplicadas: verificar que no exista ya esa ronda en este combate
+    const { data: rondaExistente } = await supabase
+      .from('tbl_rondas')
+      .select('id')
+      .eq('id_combate', idCombate)
+      .eq('numero_ronda', numeroRonda)
+      .maybeSingle();
+
+    if (rondaExistente) throw new Error('Esta ronda ya fue creada.');
+
+    // Verificar que el selector sea el jugador correcto para este número de ronda
+    const { data: combate } = await supabase
+      .from('tbl_combate')
+      .select('id_usuario_jugador1, id_usuario_jugador2')
+      .eq('id', idCombate)
+      .single();
+
+    if (!combate) throw new Error('Combate no encontrado.');
+
+    const selectorEsperado = numeroRonda === 1
+      ? combate.id_usuario_jugador1
+      : combate.id_usuario_jugador2;
+
+    // Comparamos como string porque los IDs pueden llegar en distintos tipos
+    if (String(idSelector) !== String(selectorEsperado)) {
+      throw new Error('No es tu turno de elegir la canción para esta ronda.');
+    }
+
     const { data, error } = await supabase
       .from('tbl_rondas')
       .insert({
@@ -130,6 +173,25 @@ export class CombateService {
 
   // 5. Registrar Turno
   async registrarTurno(idRonda: string, idUsuario: string, puntaje: number, urlAudio: string, feedback: any, transcripcion: string) {
+    // Evitar que un jugador cante dos veces en la misma ronda
+    const { data: turnoExistente } = await supabase
+      .from('tbl_turnos')
+      .select('id')
+      .eq('id_rondas', idRonda)
+      .eq('id_usuario', idUsuario)
+      .maybeSingle();
+
+    if (turnoExistente) throw new Error('Ya registraste tu turno en esta ronda.');
+
+    // Verificar que la ronda esté en estado pendiente (no completada)
+    const { data: ronda } = await supabase
+      .from('tbl_rondas')
+      .select('id_estado')
+      .eq('id', idRonda)
+      .single();
+
+    if (!ronda || ronda.id_estado !== 1) throw new Error('Esta ronda ya está cerrada.');
+
     const { data, error } = await supabase
       .from('tbl_turnos')
       .insert({
@@ -161,66 +223,81 @@ export class CombateService {
 
     if (error) throw new Error(error.message);
 
-    // Si hay 2 turnos completados
-    if (turnos.length === 2) {
-      let ganadorRonda = turnos[0];
-      if (turnos[1].puntaje > turnos[0].puntaje) {
-        ganadorRonda = turnos[1];
-      } else if (turnos[1].puntaje === turnos[0].puntaje) {
-        // En caso de empate exacto, gana el que cantó primero por ahora (o se puede dejar null)
-      }
+    // Esperar a que ambos jugadores hayan cantado
+    if (turnos.length < 2) return;
 
-      // Actualizar ronda
-      const { data: rondaActualizada, error: errRonda } = await supabase
-        .from('tbl_rondas')
-        .update({
-          id_usuario_ganador: ganadorRonda.id_usuario,
-          id_estado: 2 // completada
-        })
-        .eq('id', idRonda)
-        .select()
-        .single();
-
-      if (errRonda) throw new Error(errRonda.message);
-
-      // Evaluar si ya hay ganador del combate
-      await this.evaluarCombate(rondaActualizada.id_combate);
+    // Determinar ganador comparando puntajes
+    // Si hay empate exacto, id_usuario_ganador queda null (ronda empatada)
+    let idGanadorRonda: string | null = null;
+    if (turnos[0].puntaje > turnos[1].puntaje) {
+      idGanadorRonda = turnos[0].id_usuario;
+    } else if (turnos[1].puntaje > turnos[0].puntaje) {
+      idGanadorRonda = turnos[1].id_usuario;
     }
+    // Si son iguales, idGanadorRonda sigue null → ronda empatada
+
+    // Actualizar ronda con resultado
+    const { data: rondaActualizada, error: errRonda } = await supabase
+      .from('tbl_rondas')
+      .update({
+        id_usuario_ganador: idGanadorRonda,
+        id_estado: 2 // completada
+      })
+      .eq('id', idRonda)
+      .select()
+      .single();
+
+    if (errRonda) throw new Error(errRonda.message);
+
+    // Evaluar si ya hay ganador del combate
+    await this.evaluarCombate(rondaActualizada.id_combate);
   }
 
   private async evaluarCombate(idCombate: string) {
-    // Traer todas las rondas completadas
+    // Traer TODAS las rondas completadas (incluyendo las empatadas con ganador null)
     const { data: rondas, error } = await supabase
       .from('tbl_rondas')
       .select('*')
       .eq('id_combate', idCombate)
-      .not('id_usuario_ganador', 'is', null);
+      .eq('id_estado', 2); // solo completadas
 
     if (error) throw new Error(error.message);
 
-    // Contar victorias
+    // Contar victorias (ignorar rondas empatadas donde ganador es null)
     const victorias: Record<string, number> = {};
     for (const r of rondas) {
-      victorias[r.id_usuario_ganador] = (victorias[r.id_usuario_ganador] || 0) + 1;
+      if (r.id_usuario_ganador) {
+        victorias[r.id_usuario_ganador] = (victorias[r.id_usuario_ganador] || 0) + 1;
+      }
     }
 
     let ganadorCombate: string | null = null;
-    let hayDesempate = false;
 
-    // Buscar si alguien tiene 2 victorias
+    // Caso 1: alguien ya tiene 2 victorias (ganó las dos primeras rondas)
     for (const [idUsuario, count] of Object.entries(victorias)) {
       if (count >= 2) {
         ganadorCombate = idUsuario;
       }
     }
 
-    // Si hay 2 rondas y están 1 a 1, iniciar desempate
-    if (rondas.length === 2 && !ganadorCombate) {
-      hayDesempate = true;
+    // Caso 2: se completaron las 2 rondas y nadie tiene 2 victorias todavía
+    if (!ganadorCombate && rondas.length === 2) {
+      // Contar victorias de cada jugador para ver si hay ventaja
+      const counts = Object.values(victorias);
+      const maxVictorias = counts.length > 0 ? Math.max(...counts) : 0;
+      const lideres = Object.keys(victorias).filter(id => victorias[id] === maxVictorias);
+
+      if (lideres.length === 1) {
+        // Un jugador tiene más victorias que el otro (ej. 1-0 con una ronda empatada)
+        // → ese jugador gana el combate, no hace falta desempate
+        ganadorCombate = lideres[0];
+      }
+      // Si lideres.length !== 1, hay empate real (1-1 o 0-0) → se crea ronda de desempate abajo
     }
 
+    const hayDesempate = rondas.length === 2 && !ganadorCombate;
+
     if (ganadorCombate) {
-      // Actualizar combate
       await supabase
         .from('tbl_combate')
         .update({
@@ -229,7 +306,6 @@ export class CombateService {
         })
         .eq('id', idCombate);
     } else if (hayDesempate) {
-      // Lógica de desempate
       await this.crearRondaDesempate(idCombate, rondas);
     }
   }

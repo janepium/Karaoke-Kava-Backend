@@ -57,6 +57,19 @@ export class CombateController {
     }
   }
 
+  async cancelarBusqueda(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      await combateService.cancelarBusqueda(id as string);
+      return res.status(200).json({ ok: true, message: 'Búsqueda cancelada' });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        message: error instanceof Error ? error.message : 'Error al cancelar búsqueda'
+      });
+    }
+  }
+
   async rechazarCombate(req: Request, res: Response) {
     try {
       const { id } = req.params;
