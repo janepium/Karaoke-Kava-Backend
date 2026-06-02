@@ -234,17 +234,8 @@ export class EvaluacionesService {
       };
     }
 
-    // Si la similitud con la letra es casi nula, no merece puntos
-    if (similitud < 0.10) {
-      return {
-        puntaje: 0,
-        puntajeLetra: 0,
-        puntajeAudio: 0,
-        puntajeVoz: 0,
-        feedback: 'No se detectó relación con la canción. Intenta seguir la letra.',
-        transcripcion: transcripcionFinal
-      };
-    }
+    // El umbral estricto de similitud fue removido para permitir puntuar audio y voz
+    // incluso si la transcripción falla (ej. canciones en inglés).
 
     let puntajeMaximo = 100;
 
