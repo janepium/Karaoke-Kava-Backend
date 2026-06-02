@@ -8,6 +8,50 @@ async function getAI() {
   return aiInstance;
 }
 
+/**
+ * Transcribe un audio subido usando Gemini (entrada multimodal).
+ *
+ * Se usa como respaldo cuando el navegador no entregó transcripción. Esto
+ * ocurre típicamente en Android, donde la Web Speech API del navegador no puede
+ * usar el micrófono al mismo tiempo que MediaRecorder, dejando la transcripción
+ * vacía y, en consecuencia, el puntaje en cero.
+ *
+ * No se le envía la letra original a propósito: queremos que transcriba lo que
+ * el usuario realmente cantó, no la letra "ideal" (eso falsearía la similitud).
+ */
+async function transcribirAudioConGemini(urlAudio: string): Promise<string> {
+  const respuesta = await fetch(urlAudio);
+  if (!respuesta.ok) {
+    throw new Error(`No se pudo descargar el audio (HTTP ${respuesta.status})`);
+  }
+
+  // Gemini soporta audio/webm (formato que graba Chrome en Android) en la API
+  // generateContent. Tomamos el MIME real de la respuesta por robustez.
+  const contentType = respuesta.headers.get('content-type') || 'audio/webm';
+  const mimeType = contentType.split(';')[0].trim();
+
+  const arrayBuffer = await respuesta.arrayBuffer();
+  const base64Audio = Buffer.from(arrayBuffer).toString('base64');
+
+  const aiClient = await getAI();
+  const respuestaIA = await aiClient.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: [
+      {
+        text:
+          'Transcribe únicamente lo que la persona canta o dice en este audio. ' +
+          'Devuelve solo el texto, sin comentarios, sin marcas de tiempo ni explicaciones. ' +
+          'Si no hay voz audible, responde con una cadena vacía.'
+      },
+      {
+        inlineData: { mimeType, data: base64Audio }
+      }
+    ]
+  });
+
+  return (respuestaIA.text || '').trim();
+}
+
 type EvaluarPracticaInput = {
   idPractica: number;
   transcripcion: string;
@@ -210,7 +254,20 @@ export class EvaluacionesService {
     }
 
     const letra = cancion.letra || '';
-    const transcripcionFinal = transcripcion || '';
+    let transcripcionFinal = transcripcion || '';
+
+    // Respaldo de transcripción: si el navegador no entregó texto (caso típico
+    // en Android), transcribimos el audio ya subido usando Gemini. De este modo
+    // el puntaje deja de ser cero en dispositivos donde la Web Speech API falla.
+    if (!transcripcionFinal.trim() && practica.url_audio_usuario) {
+      try {
+        transcripcionFinal = await transcribirAudioConGemini(practica.url_audio_usuario);
+        console.log('Transcripción obtenida por Gemini (respaldo):', transcripcionFinal);
+      } catch (e) {
+        console.error('Falló la transcripción de audio con Gemini:', e);
+      }
+    }
+
     const duracionFinal = typeof duracionAudio === 'number' ? duracionAudio : 0;
     const duracionCancion = typeof cancion.duracion === 'number' ? cancion.duracion : 1;
 
