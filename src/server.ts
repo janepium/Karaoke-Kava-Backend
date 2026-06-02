@@ -12,10 +12,26 @@ dotenv.config();
 const app = express();
 
 const PORT = process.env.PORT || 3000;
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:4200';
+
+// FRONTEND_URL puede contener varios orígenes separados por coma.
+// localhost:4200 siempre está permitido para desarrollo local.
+const allowedOrigins = [
+  ...(process.env.FRONTEND_URL ?? 'http://localhost:4200')
+    .split(',')
+    .map(o => o.trim())
+    .filter(Boolean),
+  'http://localhost:4200'
+];
 
 app.use(cors({
-  origin: FRONTEND_URL
+  origin: (origin, callback) => {
+    // Permitir peticiones sin origen (Postman, curl, apps móviles)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origen no permitido — ${origin}`));
+    }
+  }
 }));
 
 app.use(express.json());
